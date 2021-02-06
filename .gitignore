@@ -31,3 +31,6 @@ tests/util/.requests_cache.jsonl
 
 # Config files
 .config/
+
+# Gimp project files
+*.xcf
