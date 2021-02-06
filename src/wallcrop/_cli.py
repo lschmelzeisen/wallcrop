@@ -15,7 +15,6 @@
 #
 
 from pathlib import Path
-from sys import stdout
 
 from nasty_utils import (
     Argument,
@@ -25,8 +24,10 @@ from nasty_utils import (
     SettingsConfig,
 )
 from overrides import overrides
+from PIL import Image
 
 import wallcrop
+from wallcrop._window import Window
 
 
 class WallcropSettings(LoggingSettings):
@@ -46,4 +47,6 @@ class WallcropProgram(Program):
 
     @overrides
     def run(self) -> None:
-        stdout.write("To-do\n")
+        wallpaper_path = Path("assets/Nordic Landscape 1125x250.png")
+        wallpaper = Image.open(wallpaper_path)
+        Window(wallpaper)
