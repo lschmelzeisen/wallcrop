@@ -194,6 +194,13 @@ class Window:
                 anchor="nw",
                 tags="wall",
             )
+            self.canvas.delete("sel")  # type: ignore
+            self.canvas.create_image(  # type: ignore
+                *canvas_wall_pos,
+                image=self.canvas_sel,
+                anchor="nw",
+                tags="sel",
+            )
 
         self.sel.paste(
             _SEL_BG_COLOR + (_SEL_BG_ALPHA if not self.show_unselected else "FF"),
@@ -226,10 +233,4 @@ class Window:
                 )
 
         self.canvas_sel = PhotoImage(self.sel)
-        self.canvas.delete("sel")  # type: ignore
-        self.canvas.create_image(  # type: ignore
-            *canvas_wall_pos,
-            image=self.canvas_sel,
-            anchor="nw",
-            tags="sel",
-        )
+        self.canvas.itemconfig("sel", image=self.canvas_sel)
