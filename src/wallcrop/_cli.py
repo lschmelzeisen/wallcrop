@@ -38,5 +38,5 @@ class WallcropProgram(Program):
     @overrides
     def run(self) -> None:
         wallpaper_path = Path("assets/Nordic Landscape 1125x250.png")
-        wallpaper = Image.open(wallpaper_path)
-        Window(wallpaper, self.settings.workstations[0])
+        with Image.open(wallpaper_path) as wallpaper:
+            Window(self.settings.workstations[0], wallpaper)

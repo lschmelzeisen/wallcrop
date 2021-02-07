@@ -14,75 +14,104 @@
 # limitations under the License.
 #
 
+from __future__ import annotations
+
 from tkinter import Canvas, Event, Tk
 from tkinter.ttk import Button, Frame, Label
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, cast
 
+import numpy as np
 from PIL import Image
+from PIL.ImageDraw import Draw
 from PIL.ImageTk import PhotoImage
 
 from wallcrop._settings import WorkstationSettings
 
-_PADDING = 20
-_SELECTION_ZOOM_SPEED = 0.01
-_SELECTION_ZOOM_MIN = 0.1
-_SELECTION_MOVE_SPEED = 0.02
+# Abbreviations used in this implementation:
+# - aspect: aspect ratio
+# - mon: monitor
+# - pos: position
+# - sel: selection
+# - wall: wall
+
+_GUI_MINSIZE = (800, 600)
+_GUI_PADDING = 20
+_SEL_ZOOM_SPEED = 0.01
+_SEL_ZOOM_MIN = 0.1
+_SEL_MOVE_SPEED = 0.01
+_CANVAS_BG = "#1D2021"
+_SEL_BG = "#282828"
+_SEL_BG_ALPHA = "AA"
 
 
 class Window:
-    def __init__(self, wallpaper: Image.Image, workstation: WorkstationSettings):
-        self.wallpaper = wallpaper
-        self.wallpaper_aspect_ratio = self.wallpaper.width / self.wallpaper.height
+    def __init__(self, workstation: WorkstationSettings, wallpaper: Image.Image):
         self.workstation = workstation
+        self.wall = wallpaper.convert("RGBA")
+        self.wall_size = np.array(wallpaper.size)
+        self.wall_aspect = np.divide(*self.wall_size)
 
         if not self.workstation.monitors:
             # TODO: move to pydantic validation of settings.
             raise Exception("Need at least one monitor configured per workstation.")
 
-        self.monitor_coord_min = (float("inf"), float("inf"))
-        self.monitor_coord_max = (-float("inf"), -float("inf"))
-        for monitor in self.workstation.monitors:
-            self.monitor_coord_min = (
-                min(monitor.position[0], self.monitor_coord_min[0]),
-                min(monitor.position[1], self.monitor_coord_min[1]),
-            )
-            self.monitor_coord_max = (
-                max(monitor.position[0] + monitor.size[0], self.monitor_coord_max[0]),
-                max(monitor.position[1] + monitor.size[1], self.monitor_coord_max[1]),
+        self.mon_coord_min = np.array((float("inf"), float("inf")))
+        self.mon_coord_max = np.array((-float("inf"), -float("inf")))
+        for mon in self.workstation.monitors:
+            # TODO: convert settings to np.array while parsing
+            self.mon_coord_min = np.minimum(np.array(mon.position), self.mon_coord_min)
+            self.mon_coord_max = np.maximum(
+                np.array(mon.position) + np.array(mon.size),
+                self.mon_coord_max,
             )
 
-        self.selection_pos = (0.0, 0.0)
-        self.selection_zoom = 1.0
+        self.sel_pos = np.array((0.0, 0.0))
+        self.sel_zoom_factor = 1.0
+
+        self.last_canvas_size = np.array([0.0, 0.0])
+        self.resized_wall = self.wall
+        self.canvas_wall: Optional[PhotoImage] = None
+        self.sel = self.wall
+        self.sel_draw = Draw(self.sel)
+        self.canvas_sel: Optional[PhotoImage] = None
+
+        self.blacken_unselected = False
 
         root = Tk()
         root.title("wallcrop")
-        root.minsize(800, 600)
+        root.minsize(*_GUI_MINSIZE)
 
         root.columnconfigure(0, weight=1)  # type: ignore
         root.rowconfigure(0, weight=1)  # type: ignore
 
-        root.bind("<i>", self.zoom_selection(-1.0))
-        root.bind("<o>", self.zoom_selection(+1.0))
-        root.bind("<Left>", self.move_selection((-1.0, 0.0)))
-        root.bind("<Right>", self.move_selection((1.0, 0.0)))
-        root.bind("<Up>", self.move_selection((0.0, -1.0)))
-        root.bind("<Down>", self.move_selection((0.0, 1.0)))
+        sel_zoom_in = self.sel_zoom(-1.0)
+        sel_zoom_out = self.sel_zoom(+1.0)
+        sel_move_left = self.sel_move((-1.0, 0.0))
+        sel_move_right = self.sel_move((+1.0, 0.0))
+        sel_move_up = self.sel_move((0.0, -1.0))
+        sel_move_down = self.sel_move((0.0, +1.0))
 
-        frame = Frame(root, padding=_PADDING)
+        root.bind("<Escape>", lambda _event: root.destroy())
+        root.bind("<i>", sel_zoom_in)
+        root.bind("<o>", sel_zoom_out)
+        root.bind("<Left>", sel_move_left)
+        root.bind("<Right>", sel_move_right)
+        root.bind("<Up>", sel_move_up)
+        root.bind("<Down>", sel_move_down)
+        root.bind("<b>", self.toggle_blacken_unselected)
+
+        frame = Frame(root, padding=_GUI_PADDING)
         frame.grid(column=0, row=0, sticky="n w s e")
         frame.columnconfigure(0, weight=1)  # type: ignore
         frame.rowconfigure(1, weight=1)  # type: ignore
 
-        self.canvas_wallpaper: Optional[PhotoImage] = None
         self.canvas = Canvas(frame)
         self.canvas.configure(
-            width=200,
-            height=200,
-            background="#1D2021",
+            background=_CANVAS_BG,
             borderwidth=0,
             highlightthickness=0,
         )
-        self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_PADDING)
+        self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_GUI_PADDING)
         self.canvas.bind("<Configure>", self.redraw_canvas)
 
         label = Label(frame, text="Label")
@@ -93,91 +122,84 @@ class Window:
 
         root.mainloop()
 
-    def zoom_selection(self, delta: float) -> Callable[[Optional["Event[Any]"]], None]:
-        def event_handler(_event: Optional["Event[Any]"] = None) -> None:
-            self.selection_zoom += delta * _SELECTION_ZOOM_SPEED
+    def sel_zoom(self, delta: float) -> Callable[[Optional[Event[Any]]], None]:
+        def event_handler(_event: Optional[Event[Any]] = None) -> None:
+            self.sel_zoom_factor += delta * _SEL_ZOOM_SPEED
             self.redraw_canvas()
 
         return event_handler
 
-    def move_selection(
+    def sel_move(
         self, delta: Tuple[float, float]
-    ) -> Callable[[Optional["Event[Any]"]], None]:
-        def event_handler(_event: Optional["Event[Any]"] = None) -> None:
-            self.selection_pos = (
-                self.selection_pos[0]
-                + delta[0] / self.wallpaper_aspect_ratio * _SELECTION_MOVE_SPEED,
-                self.selection_pos[1] + delta[1] * _SELECTION_MOVE_SPEED,
-            )
+    ) -> Callable[[Optional[Event[Any]]], None]:
+        def event_handler(_event: Optional[Event[Any]] = None) -> None:
+            aspect_delta = np.array((delta[0], delta[1] * self.wall_aspect))
+            self.sel_pos += aspect_delta * _SEL_MOVE_SPEED
             self.redraw_canvas()
 
         return event_handler
+
+    def toggle_blacken_unselected(self, _event: Optional[Event[Any]] = None) -> None:
+        self.blacken_unselected = not self.blacken_unselected
+        self.redraw_canvas()
 
     def redraw_canvas(self, _event: "Optional[Event[Any]]" = None) -> None:
-        self.selection_zoom = max(_SELECTION_ZOOM_MIN, min(self.selection_zoom, 1.0))
-        self.selection_pos = (
-            max(0.0, min(self.selection_pos[0], 1.0 - self.selection_zoom)),
-            max(0.0, min(self.selection_pos[1], 1.0 - self.selection_zoom)),
+        self.sel_zoom_factor = max(_SEL_ZOOM_MIN, min(self.sel_zoom_factor, 1.0))
+        self.sel_pos = np.maximum(
+            0.0, np.minimum(1.0 - self.sel_zoom_factor, self.sel_pos)
         )
 
-        canvas_size = (self.canvas.winfo_width(), self.canvas.winfo_height())
+        canvas_size = np.array((self.canvas.winfo_width(), self.canvas.winfo_height()))
+        canvas_wall_size = np.array(((canvas_size[0] - 2 * _GUI_PADDING), 0))
+        canvas_wall_size[1] = int(canvas_wall_size[0] / self.wall_aspect)
+        if canvas_wall_size[1] > canvas_size[1] - 2 * _GUI_PADDING:
+            canvas_wall_size[1] = canvas_size[1] - 2 * _GUI_PADDING
+            canvas_wall_size[0] = int(canvas_wall_size[1] * self.wall_aspect)
+        canvas_wall_pos = (canvas_size - canvas_wall_size) / 2
 
-        canvas_wallpaper_size = (
-            canvas_size[0] - 2 * _PADDING,
-            int((canvas_size[0] - 2 * _PADDING) / self.wallpaper_aspect_ratio),
-        )
-        if canvas_wallpaper_size[1] > canvas_size[1] - 2 * _PADDING:
-            canvas_wallpaper_size = (
-                int((canvas_size[1] - 2 * _PADDING) * self.wallpaper_aspect_ratio),
-                canvas_size[1] - 2 * _PADDING,
+        if not np.array_equal(canvas_size, self.last_canvas_size):
+            self.last_canvas_size = canvas_size
+
+            self.resized_wall = self.wall.resize(
+                cast(Tuple[int, int], tuple(canvas_wall_size)), Image.LANCZOS
+            )
+            self.canvas_wall = PhotoImage(self.resized_wall)
+
+            self.sel = Image.new(
+                "RGBA", cast(Tuple[int, int], tuple(canvas_wall_size.astype(int)))
+            )
+            self.sel_draw = Draw(self.sel)
+
+            self.canvas.delete("wall")  # type: ignore
+            self.canvas.create_image(  # type: ignore
+                *canvas_wall_pos,
+                image=self.canvas_wall,
+                anchor="nw",
+                tags="wall",
             )
 
-        canvas_wallpaper_position = (
-            (canvas_size[0] - canvas_wallpaper_size[0]) / 2,
-            (canvas_size[1] - canvas_wallpaper_size[1]) / 2,
+        self.sel.paste(
+            _SEL_BG + ("FF" if self.blacken_unselected else _SEL_BG_ALPHA),
+            (0, 0, *self.sel.size),
         )
 
-        self.canvas_wallpaper = PhotoImage(
-            self.wallpaper.resize(canvas_wallpaper_size, Image.LANCZOS)
-        )
+        for mon in self.workstation.monitors:
+            mon_sel_size = (
+                np.array(mon.size) * self.sel_zoom_factor / self.mon_coord_max
+            )
+            mon_sel_pos = (np.array(mon.position) - self.mon_coord_min) * (
+                self.sel_zoom_factor / self.mon_coord_max
+            )
+            mon_canvas_pos1 = (self.sel_pos + mon_sel_pos) * canvas_wall_size
+            mon_canvas_pos2 = mon_canvas_pos1 + mon_sel_size * canvas_wall_size
 
-        self.canvas.delete("wallpaper")  # type: ignore
+            self.sel_draw.rectangle((*mon_canvas_pos1, *mon_canvas_pos2), "#FFFFFF00")
+
+        self.canvas_sel = PhotoImage(self.sel)
+        self.canvas.delete("sel")  # type: ignore
         self.canvas.create_image(  # type: ignore
-            canvas_wallpaper_position[0],
-            canvas_wallpaper_position[1],
-            image=self.canvas_wallpaper,
+            *canvas_wall_pos,
+            image=self.canvas_sel,
             anchor="nw",
-            tags="wallpaper",
+            tags="sel",
         )
-
-        for i, monitor in enumerate(self.workstation.monitors):
-            monitor_selection_pos = (
-                (monitor.position[0] - self.monitor_coord_min[0])
-                * (self.selection_zoom / self.monitor_coord_max[0]),
-                (monitor.position[1] - self.monitor_coord_min[1])
-                * (self.selection_zoom / self.monitor_coord_max[1]),
-            )
-            monitor_selection_size = (
-                monitor.size[0] * (self.selection_zoom / self.monitor_coord_max[0]),
-                monitor.size[1] * (self.selection_zoom / self.monitor_coord_max[1]),
-            )
-            monitor_pos_canvas = (
-                (self.selection_pos[0] + monitor_selection_pos[0])
-                * canvas_wallpaper_size[0]
-                + canvas_wallpaper_position[0],
-                (self.selection_pos[1] + monitor_selection_pos[1])
-                * canvas_wallpaper_size[1]
-                + canvas_wallpaper_position[1],
-            )
-
-            self.canvas.delete(f"selection-monitor-{i}")  # type: ignore
-            self.canvas.create_rectangle(  # type: ignore
-                monitor_pos_canvas[0],
-                monitor_pos_canvas[1],
-                monitor_pos_canvas[0]
-                + monitor_selection_size[0] * canvas_wallpaper_size[0],
-                monitor_pos_canvas[1]
-                + monitor_selection_size[1] * canvas_wallpaper_size[1],
-                outline="yellow",
-                tags=f"selection-monitor-{i}",
-            )

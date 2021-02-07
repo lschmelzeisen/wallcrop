@@ -6,7 +6,7 @@ help: ##- Show this help message.
 # ------------------------------------------------------------------------------
 
 .venv:
-	@python3.6 -m venv .venv
+	@python3.7 -m venv .venv
 
 .venv/.devinstall: .venv
 	@.venv/bin/pip install --upgrade pip setuptools wheel

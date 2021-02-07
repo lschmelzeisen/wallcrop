@@ -22,7 +22,7 @@ options.reuse_existing_virtualenvs = True
 options.stop_on_first_error = True
 
 
-@session(python=["3.6", "3.7", "3.8", "3.9", "pypy3"])
+@session(python=["3.7", "3.8", "3.9", "pypy3"])
 def test(session: Session) -> None:
     session.install("-e", ".[test]")
     session.run(
