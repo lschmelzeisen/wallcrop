@@ -37,6 +37,8 @@ from wallcrop._settings import WorkstationSettings
 
 _GUI_MINSIZE = (800, 600)
 _GUI_PADDING = 20
+_GUI_REDRAW_FPS = 30
+_SEL_DEFAULT_ZOOM = 0.75
 _SEL_ZOOM_SPEED = 0.01
 _SEL_ZOOM_MIN = 0.1
 _SEL_MOVE_SPEED = 0.01
@@ -72,8 +74,8 @@ class Window:
                 self.mon_coord_max,
             )
 
-        self.sel_pos = np.array((0.0, 0.0))
-        self.sel_zoom_factor = 1.0
+        self.sel_zoom_factor = _SEL_DEFAULT_ZOOM
+        self.sel_pos = (np.ones(2) - self.sel_zoom_factor) / 2  # Center selection.
 
         self.last_canvas_size = np.array([0.0, 0.0])
         self.resized_wall = self.wall
@@ -82,15 +84,17 @@ class Window:
         self.sel_draw = Draw(self.sel)
         self.canvas_sel: Optional[PhotoImage] = None
 
+        self.redraw_scheduled = False
+
         self.label_monitors = False
         self.show_unselected = False
 
-        root = Tk()
-        root.title("wallcrop")
-        root.minsize(*_GUI_MINSIZE)
+        self.root = Tk()
+        self.root.title("wallcrop")
+        self.root.minsize(*_GUI_MINSIZE)
 
-        root.columnconfigure(0, weight=1)  # type: ignore
-        root.rowconfigure(0, weight=1)  # type: ignore
+        self.root.columnconfigure(0, weight=1)  # type: ignore
+        self.root.rowconfigure(0, weight=1)  # type: ignore
 
         sel_zoom_in = self.sel_zoom(-1.0)
         sel_zoom_out = self.sel_zoom(+1.0)
@@ -99,21 +103,21 @@ class Window:
         sel_move_up = self.sel_move((0.0, -1.0))
         sel_move_down = self.sel_move((0.0, +1.0))
 
-        root.bind("<Escape>", lambda _event: root.destroy())
-        root.bind("<i>", sel_zoom_in)
-        root.bind("<o>", sel_zoom_out)
-        root.bind("<Left>", sel_move_left)
-        root.bind("<h>", sel_move_left)
-        root.bind("<Right>", sel_move_right)
-        root.bind("<l>", sel_move_right)
-        root.bind("<Up>", sel_move_up)
-        root.bind("<k>", sel_move_up)
-        root.bind("<Down>", sel_move_down)
-        root.bind("<j>", sel_move_down)
-        root.bind("<m>", self.toggle_label_monitors)
-        root.bind("<n>", self.toggle_show_unselected)
+        self.root.bind("<Escape>", lambda _event: self.root.destroy())
+        self.root.bind("<i>", sel_zoom_in)
+        self.root.bind("<o>", sel_zoom_out)
+        self.root.bind("<Left>", sel_move_left)
+        self.root.bind("<h>", sel_move_left)
+        self.root.bind("<Right>", sel_move_right)
+        self.root.bind("<l>", sel_move_right)
+        self.root.bind("<Up>", sel_move_up)
+        self.root.bind("<k>", sel_move_up)
+        self.root.bind("<Down>", sel_move_down)
+        self.root.bind("<j>", sel_move_down)
+        self.root.bind("<m>", self.toggle_label_monitors)
+        self.root.bind("<n>", self.toggle_show_unselected)
 
-        frame = Frame(root, padding=_GUI_PADDING)
+        frame = Frame(self.root, padding=_GUI_PADDING)
         frame.grid(column=0, row=0, sticky="n w s e")
         frame.columnconfigure(0, weight=1)  # type: ignore
         frame.rowconfigure(1, weight=1)  # type: ignore
@@ -125,7 +129,7 @@ class Window:
             highlightthickness=0,
         )
         self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_GUI_PADDING)
-        self.canvas.bind("<Configure>", self.redraw_canvas)
+        self.canvas.bind("<Configure>", self.redraw)
 
         label = Label(frame, text="Label")
         label.grid(column=0, row=0, sticky="w")
@@ -133,12 +137,12 @@ class Window:
         button = Button(frame, text="Button")
         button.grid(column=0, row=2, sticky="e")
 
-        root.mainloop()
+        self.root.mainloop()
 
     def sel_zoom(self, delta: float) -> Callable[[Optional[Event[Any]]], None]:
         def event_handler(_event: Optional[Event[Any]] = None) -> None:
             self.sel_zoom_factor += delta * _SEL_ZOOM_SPEED
-            self.redraw_canvas()
+            self.schedule_redraw()
 
         return event_handler
 
@@ -148,23 +152,27 @@ class Window:
         def event_handler(_event: Optional[Event[Any]] = None) -> None:
             aspect_delta = np.array((delta[0], delta[1] * self.wall_aspect))
             self.sel_pos += aspect_delta * _SEL_MOVE_SPEED
-            self.redraw_canvas()
+
+            self.schedule_redraw()
 
         return event_handler
 
     def toggle_label_monitors(self, _event: Optional[Event[Any]] = None) -> None:
         self.label_monitors = not self.label_monitors
-        self.redraw_canvas()
+        self.schedule_redraw()
 
     def toggle_show_unselected(self, _event: Optional[Event[Any]] = None) -> None:
         self.show_unselected = not self.show_unselected
-        self.redraw_canvas()
+        self.schedule_redraw()
 
-    def redraw_canvas(self, _event: "Optional[Event[Any]]" = None) -> None:
+    def schedule_redraw(self) -> None:
+        if not self.redraw_scheduled:
+            self.redraw_scheduled = True
+            self.root.after(1000 // _GUI_REDRAW_FPS, self.redraw)
+
+    def redraw(self, _event: "Optional[Event[Any]]" = None) -> None:
         self.sel_zoom_factor = max(_SEL_ZOOM_MIN, min(self.sel_zoom_factor, 1.0))
-        self.sel_pos = np.maximum(
-            0.0, np.minimum(1.0 - self.sel_zoom_factor, self.sel_pos)
-        )
+        self.sel_pos = np.clip(self.sel_pos, 0.0, 1.0 - self.sel_zoom_factor)
 
         canvas_size = np.array((self.canvas.winfo_width(), self.canvas.winfo_height()))
         canvas_wall_size = np.array(((canvas_size[0] - 2 * _GUI_PADDING), 0))
@@ -172,7 +180,6 @@ class Window:
         if canvas_wall_size[1] > canvas_size[1] - 2 * _GUI_PADDING:
             canvas_wall_size[1] = canvas_size[1] - 2 * _GUI_PADDING
             canvas_wall_size[0] = int(canvas_wall_size[1] * self.wall_aspect)
-        canvas_wall_pos = (canvas_size - canvas_wall_size) / 2
 
         if not np.array_equal(canvas_size, self.last_canvas_size):
             self.last_canvas_size = canvas_size
@@ -187,6 +194,7 @@ class Window:
             )
             self.sel_draw = Draw(self.sel)
 
+            canvas_wall_pos = (canvas_size - canvas_wall_size) / 2
             self.canvas.delete("wall")  # type: ignore
             self.canvas.create_image(  # type: ignore
                 *canvas_wall_pos,
@@ -228,9 +236,11 @@ class Window:
             if self.label_monitors:
                 self.sel_draw.text(
                     tuple(mon_canvas_pos1),
-                    f"{mon.name} ({mon.resolution[0]}x{mon.resolution[1]})",
+                    f"{mon.name}\n({mon.resolution[0]}x{mon.resolution[1]})",
                     mon_label_color + "FF",
                 )
 
         self.canvas_sel = PhotoImage(self.sel)
         self.canvas.itemconfig("sel", image=self.canvas_sel)
+
+        self.redraw_scheduled = False
