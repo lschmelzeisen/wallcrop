@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from itertools import cycle
 from tkinter import Canvas, Event, Tk
 from tkinter.ttk import Button, Frame, Label
 from typing import Any, Callable, Optional, Tuple, cast
@@ -40,8 +41,14 @@ _SEL_ZOOM_SPEED = 0.01
 _SEL_ZOOM_MIN = 0.1
 _SEL_MOVE_SPEED = 0.01
 _CANVAS_BG = "#1D2021"
-_SEL_BG = "#282828"
+_SEL_BG_COLOR = "#282828"
 _SEL_BG_ALPHA = "AA"
+_MON_LABEL_COLORS = (
+    ("#FB4934", "#B8BB26", "FABD2F", "#83A598", "#D3869B", "#8EC07C", "#FE8019")
+    + ("#CC241D", "#98971A", "#D79921", "#458588", "#B16286", "#689D6A", "#D65D0E")
+    + ("#9D0006", "#79740E", "#B57614", "#076678", "#8F3F71", "#427B58", "#AF3A03")
+)
+_MON_LABEL_ALPHA = "33"
 
 
 class Window:
@@ -75,7 +82,8 @@ class Window:
         self.sel_draw = Draw(self.sel)
         self.canvas_sel: Optional[PhotoImage] = None
 
-        self.blacken_unselected = False
+        self.label_monitors = False
+        self.show_unselected = False
 
         root = Tk()
         root.title("wallcrop")
@@ -95,10 +103,15 @@ class Window:
         root.bind("<i>", sel_zoom_in)
         root.bind("<o>", sel_zoom_out)
         root.bind("<Left>", sel_move_left)
+        root.bind("<h>", sel_move_left)
         root.bind("<Right>", sel_move_right)
+        root.bind("<l>", sel_move_right)
         root.bind("<Up>", sel_move_up)
+        root.bind("<k>", sel_move_up)
         root.bind("<Down>", sel_move_down)
-        root.bind("<b>", self.toggle_blacken_unselected)
+        root.bind("<j>", sel_move_down)
+        root.bind("<m>", self.toggle_label_monitors)
+        root.bind("<n>", self.toggle_show_unselected)
 
         frame = Frame(root, padding=_GUI_PADDING)
         frame.grid(column=0, row=0, sticky="n w s e")
@@ -139,8 +152,12 @@ class Window:
 
         return event_handler
 
-    def toggle_blacken_unselected(self, _event: Optional[Event[Any]] = None) -> None:
-        self.blacken_unselected = not self.blacken_unselected
+    def toggle_label_monitors(self, _event: Optional[Event[Any]] = None) -> None:
+        self.label_monitors = not self.label_monitors
+        self.redraw_canvas()
+
+    def toggle_show_unselected(self, _event: Optional[Event[Any]] = None) -> None:
+        self.show_unselected = not self.show_unselected
         self.redraw_canvas()
 
     def redraw_canvas(self, _event: "Optional[Event[Any]]" = None) -> None:
@@ -179,11 +196,13 @@ class Window:
             )
 
         self.sel.paste(
-            _SEL_BG + ("FF" if self.blacken_unselected else _SEL_BG_ALPHA),
+            _SEL_BG_COLOR + (_SEL_BG_ALPHA if not self.show_unselected else "FF"),
             (0, 0, *self.sel.size),
         )
 
-        for mon in self.workstation.monitors:
+        for mon, mon_label_color in zip(
+            self.workstation.monitors, cycle(_MON_LABEL_COLORS)
+        ):
             mon_sel_size = (
                 np.array(mon.size) * self.sel_zoom_factor / self.mon_coord_max
             )
@@ -193,7 +212,18 @@ class Window:
             mon_canvas_pos1 = (self.sel_pos + mon_sel_pos) * canvas_wall_size
             mon_canvas_pos2 = mon_canvas_pos1 + mon_sel_size * canvas_wall_size
 
-            self.sel_draw.rectangle((*mon_canvas_pos1, *mon_canvas_pos2), "#FFFFFF00")
+            self.sel_draw.rectangle(
+                (*mon_canvas_pos1, *mon_canvas_pos2),
+                "#FFFFFF00"
+                if not self.label_monitors
+                else mon_label_color + _MON_LABEL_ALPHA,
+            )
+            if self.label_monitors:
+                self.sel_draw.text(
+                    tuple(mon_canvas_pos1),
+                    f"{mon.name} ({mon.resolution[0]}x{mon.resolution[1]})",
+                    mon_label_color + "FF",
+                )
 
         self.canvas_sel = PhotoImage(self.sel)
         self.canvas.delete("sel")  # type: ignore
