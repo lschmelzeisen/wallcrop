@@ -1,3 +1,18 @@
+[[workstations]]
+name = "example"
+
+    [[workstations.monitors]]
+    name = "monitor1"
+    size = [1198.12, 336.97]
+    position = [0.0, 0.0]
+    resolution = [5120, 1440]
+
+    [[workstations.monitors]]
+    name = "monitor2"
+    size = [336.38, 228.96]
+    position = [1208.12, 0.0]
+    resolution = [3840, 2400]
+
 [logging]
 version = 1
 disable_existing_loggers = false
