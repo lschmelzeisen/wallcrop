@@ -148,28 +148,28 @@ class Window:
         menu = Menu(self.root)
 
         menu_file = Menu(menu)
-        menu_file.add_command(
+        menu_file.add_command(  # type: ignore
             label="Quit", underline=0, accelerator="Q, Escape", command=self.exit
         )
-        menu.add_cascade(menu=menu_file, label="File", underline=0)
+        menu.add_cascade(menu=menu_file, label="File", underline=0)  # type: ignore
 
         menu_view = Menu(menu)
-        menu_view.add_checkbutton(
+        menu_view.add_checkbutton(  # type: ignore
             label="Label Monitors",
             variable=self.label_monitors,
             underline=6,
             accelerator="M",
         )
-        menu_view.add_checkbutton(
+        menu_view.add_checkbutton(  # type: ignore
             label="Show Unselected",
             variable=self.show_unselected,
             underline=6,
             accelerator="N",
         )
-        menu.add_cascade(menu=menu_view, label="View", underline=0)
+        menu.add_cascade(menu=menu_view, label="View", underline=0)  # type: ignore
 
         menu_help = Menu(menu, name="help")
-        menu_help.add_command(
+        menu_help.add_command(  # type: ignore
             label="About Wallcrop",
             underline=0,
             command=lambda: messagebox.showinfo(
@@ -183,7 +183,7 @@ class Window:
                 ),
             ),
         )
-        menu.add_cascade(menu=menu_help, label="Help", underline=1)
+        menu.add_cascade(menu=menu_help, label="Help", underline=1)  # type: ignore
 
         # TODO: check that this look good on macOS, as decribed here:
         #   https://tkdocs.com/tutorial/menus.html#platformmenus
