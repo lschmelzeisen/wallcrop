@@ -31,6 +31,7 @@ import logging
 from wallcrop.__main__ import main
 
 __all__ = [
+    "__version__",
     "main",
 ]
 

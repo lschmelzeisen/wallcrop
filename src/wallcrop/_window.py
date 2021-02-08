@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from itertools import cycle
-from tkinter import Canvas, Event, Tk
+from tkinter import BooleanVar, Canvas, Event, Menu, Tk, messagebox
 from tkinter.ttk import Frame, Label, Spinbox
 from typing import Any, Callable, Optional, Tuple, cast
 
@@ -27,6 +27,7 @@ from PIL import Image
 from PIL.ImageDraw import Draw
 from PIL.ImageTk import PhotoImage
 
+import wallcrop
 from wallcrop._settings import WorkstationSettings
 
 # Abbreviations used in this implementation:
@@ -91,8 +92,6 @@ class Window:
         self.canvas_sel: Optional[PhotoImage] = None
 
         self.redraw_scheduled = False
-        self.label_monitors = False
-        self.show_unselected = False
         self.mouse_moving = False
         self.mouse_zooming = False
         self.mouse_zooming_anchor: Optional[np.ndarray] = None
@@ -109,12 +108,21 @@ class Window:
         self.root.title("wallcrop")
         self.root.minsize(*_GUI_MINSIZE)
 
-        self.root.columnconfigure(0, weight=1)  # type: ignore
-        self.root.rowconfigure(0, weight=1)  # type: ignore
+        self.label_monitors = BooleanVar(self.root, value=False)
+        self.label_monitors.trace_add("write", self.schedule_redraw)
+        self.show_unselected = BooleanVar(self.root, value=True)
+        self.show_unselected.trace_add("write", self.schedule_redraw)
 
-        self.root.bind("<Escape>", lambda _event: self.root.destroy())
-        self.root.bind("<m>", self.toggle_label_monitors)
-        self.root.bind("<n>", self.toggle_show_unselected)
+        self.root.bind("<Escape>", self.exit)
+        self.root.bind("<q>", self.exit)
+        self.root.bind(
+            "<m>",
+            lambda _event: self.label_monitors.set(not (self.label_monitors.get())),
+        )
+        self.root.bind(
+            "<n>",
+            lambda _event: self.show_unselected.set(not (self.show_unselected.get())),
+        )
         self.root.bind("<i>", sel_zoom_in)
         self.root.bind("<I>", sel_zoom_in)
         self.root.bind("<o>", sel_zoom_out)
@@ -136,8 +144,55 @@ class Window:
         self.root.bind("<j>", sel_move_down)
         self.root.bind("<J>", sel_move_down)
 
+        self.root.option_add("*tearOff", False)
+        menu = Menu(self.root)
+
+        menu_file = Menu(menu)
+        menu_file.add_command(
+            label="Quit", underline=0, accelerator="Q, Escape", command=self.exit
+        )
+        menu.add_cascade(menu=menu_file, label="File", underline=0)
+
+        menu_view = Menu(menu)
+        menu_view.add_checkbutton(
+            label="Label Monitors",
+            variable=self.label_monitors,
+            underline=6,
+            accelerator="M",
+        )
+        menu_view.add_checkbutton(
+            label="Show Unselected",
+            variable=self.show_unselected,
+            underline=6,
+            accelerator="N",
+        )
+        menu.add_cascade(menu=menu_view, label="View", underline=0)
+
+        menu_help = Menu(menu, name="help")
+        menu_help.add_command(
+            label="About Wallcrop",
+            underline=0,
+            command=lambda: messagebox.showinfo(
+                parent=self.root,
+                title="About Wallcrop",
+                message=f"Wallcrop {wallcrop.__version__}",
+                detail=(
+                    "Copyright 2021 Lukas Schmelzeisen.\n"
+                    "Licensed under the Apache License, Version 2.0.\n"
+                    "https://github.com/lschmelzeisen/wallcrop/"
+                ),
+            ),
+        )
+        menu.add_cascade(menu=menu_help, label="Help", underline=1)
+
+        # TODO: check that this look good on macOS, as decribed here:
+        #   https://tkdocs.com/tutorial/menus.html#platformmenus
+        self.root["menu"] = menu
+
         frame = Frame(self.root, padding=_GUI_PADDING)
         frame.grid(column=0, row=0, sticky="n w s e")
+        self.root.columnconfigure(0, weight=1)  # type: ignore
+        self.root.rowconfigure(0, weight=1)  # type: ignore
 
         self.canvas = Canvas(frame)
         self.canvas.configure(
@@ -209,13 +264,8 @@ class Window:
 
         self.root.mainloop()
 
-    def toggle_label_monitors(self, _event: Optional[Event[Any]] = None) -> None:
-        self.label_monitors = not self.label_monitors
-        self.schedule_redraw()
-
-    def toggle_show_unselected(self, _event: Optional[Event[Any]] = None) -> None:
-        self.show_unselected = not self.show_unselected
-        self.schedule_redraw()
+    def exit(self, _event: Optional[Event[Any]] = None) -> None:
+        self.root.destroy()
 
     def sel_move(
         self, delta: Tuple[float, float]
@@ -315,7 +365,7 @@ class Window:
 
         self.mouse_last_pos = mouse_pos
 
-    def schedule_redraw(self, _event: Optional[Event[Any]] = None) -> None:
+    def schedule_redraw(self, *_args: object) -> None:
         if not self.redraw_scheduled:
             self.redraw_scheduled = True
             self.root.after(1000 // _GUI_REDRAW_FPS, self.redraw)
@@ -372,7 +422,7 @@ class Window:
             )
 
         self.sel.paste(
-            _SEL_BG_COLOR + (_SEL_BG_ALPHA if not self.show_unselected else "FF"),
+            _SEL_BG_COLOR + (_SEL_BG_ALPHA if self.show_unselected.get() else "FF"),
             (0, 0, *self.sel.size),
         )
 
@@ -391,10 +441,10 @@ class Window:
             self.sel_draw.rectangle(
                 (*mon_canvas_pos1, *mon_canvas_pos2),
                 "#FFFFFF00"
-                if not self.label_monitors
+                if not self.label_monitors.get()
                 else mon_label_color + _MON_LABEL_ALPHA,
             )
-            if self.label_monitors:
+            if self.label_monitors.get():
                 self.sel_draw.text(
                     tuple(mon_canvas_pos1),
                     f"{mon.name}\n({mon.resolution[0]}x{mon.resolution[1]})",
