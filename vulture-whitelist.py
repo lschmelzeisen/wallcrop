@@ -7,6 +7,3 @@ search_path  # unused variable (/home/lschmelzeisen/Repositories/wallcrop/src/wa
 Config  # unused class (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_cli.py:39)
 version  # unused variable (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_cli.py:41)
 description  # unused variable (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_cli.py:42)
-settings  # unused variable (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_cli.py:44)
-Event  # unused import (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_window.py:17)
-Any  # unused import (/home/lschmelzeisen/Repositories/wallcrop/src/wallcrop/_window.py:19)

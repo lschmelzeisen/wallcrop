@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from itertools import cycle
 from tkinter import Canvas, Event, Tk
-from tkinter.ttk import Button, Frame, Label
+from tkinter.ttk import Frame, Label, Spinbox
 from typing import Any, Callable, Optional, Tuple, cast
 
 import numpy as np
@@ -98,38 +98,19 @@ class Window:
         self.mouse_zooming_anchor: Optional[np.ndarray] = None
         self.mouse_last_pos = np.array((0.0, 0.0))
 
-        self.root = Tk()
-        self.root.title("wallcrop")
-        self.root.minsize(*_GUI_MINSIZE)
-
-        self.root.columnconfigure(0, weight=1)  # type: ignore
-        self.root.rowconfigure(0, weight=1)  # type: ignore
-
-        frame = Frame(self.root, padding=_GUI_PADDING)
-        frame.grid(column=0, row=0, sticky="n w s e")
-        frame.columnconfigure(0, weight=1)  # type: ignore
-        frame.rowconfigure(1, weight=1)  # type: ignore
-
-        self.canvas = Canvas(frame)
-        self.canvas.configure(
-            background=_CANVAS_BG,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_GUI_PADDING)
-
-        label = Label(frame, text="Label")
-        label.grid(column=0, row=0, sticky="w")
-
-        button = Button(frame, text="Button")
-        button.grid(column=0, row=2, sticky="e")
-
         sel_move_left = self.sel_move((-_SEL_MOVE_SPEED, 0.0))
         sel_move_right = self.sel_move((+_SEL_MOVE_SPEED, 0.0))
         sel_move_up = self.sel_move((0.0, -_SEL_MOVE_SPEED))
         sel_move_down = self.sel_move((0.0, +_SEL_MOVE_SPEED))
         sel_zoom_in = self.sel_zoom(-_SEL_ZOOM_SPEED)
         sel_zoom_out = self.sel_zoom(+_SEL_ZOOM_SPEED)
+
+        self.root = Tk()
+        self.root.title("wallcrop")
+        self.root.minsize(*_GUI_MINSIZE)
+
+        self.root.columnconfigure(0, weight=1)  # type: ignore
+        self.root.rowconfigure(0, weight=1)  # type: ignore
 
         self.root.bind("<Escape>", lambda _event: self.root.destroy())
         self.root.bind("<m>", self.toggle_label_monitors)
@@ -155,6 +136,19 @@ class Window:
         self.root.bind("<j>", sel_move_down)
         self.root.bind("<J>", sel_move_down)
 
+        frame = Frame(self.root, padding=_GUI_PADDING)
+        frame.grid(column=0, row=0, sticky="n w s e")
+
+        self.canvas = Canvas(frame)
+        self.canvas.configure(
+            background=_CANVAS_BG,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_GUI_PADDING)
+        frame.columnconfigure(0, weight=1)  # type: ignore
+        frame.rowconfigure(1, weight=1)  # type: ignore
+
         # TODO: check if these keybinds work on Windows/macOS
         self.canvas.bind("<Motion>", self.mouse_motion)
         self.canvas.bind("<ButtonPress-1>", self.start_mouse_move)
@@ -167,6 +161,52 @@ class Window:
         self.canvas.bind("<Shift-ButtonPress-5>", sel_zoom_in)
         self.canvas.bind("<Configure>", self.schedule_redraw)
 
+        frame_top = Frame(frame)
+        frame_top.grid(column=0, row=0, sticky="n w s e")
+
+        label_wallpaper = Label(frame_top, text=workstation.name)
+        label_wallpaper.grid(column=0, row=0)
+
+        frame_bot = Frame(frame)
+        frame_bot.grid(column=0, row=2, sticky="n w s e")
+        frame_bot.columnconfigure(0, weight=1)  # type: ignore
+        frame_bot.columnconfigure(7, weight=1)  # type: ignore
+
+        label_sel_pos_x = Label(frame_bot, text="X: ")
+        label_sel_pos_x.grid(column=1, row=0)
+        self.spinbox_sel_pos_x = Spinbox(
+            frame_bot, width=5, validate="focusout", validatecommand=self.sel_set_pos_x
+        )
+        self.spinbox_sel_pos_x.bind("<Return>", self.sel_set_pos_x)  # type: ignore
+        self.spinbox_sel_pos_x.bind("<<Decrement>>", sel_move_left)
+        self.spinbox_sel_pos_x.bind("<<Increment>>", sel_move_right)
+        self.spinbox_sel_pos_x.grid(column=2, row=0)
+
+        label_sel_pos_y = Label(frame_bot, text="  Y: ")
+        label_sel_pos_y.grid(column=3, row=0)
+        self.spinbox_sel_pos_y = Spinbox(
+            frame_bot, width=5, validate="focusout", validatecommand=self.sel_set_pos_y
+        )
+        self.spinbox_sel_pos_y.bind("<Return>", self.sel_set_pos_y)  # type: ignore
+        self.spinbox_sel_pos_y.bind("<<Decrement>>", sel_move_up)
+        self.spinbox_sel_pos_y.bind("<<Increment>>", sel_move_down)
+        self.spinbox_sel_pos_y.grid(column=4, row=0)
+
+        label_sel_zoom_factor = Label(frame_bot, text="  Zoom: ")
+        label_sel_zoom_factor.grid(column=5, row=0)
+        self.spinbox_sel_zoom_factor = Spinbox(
+            frame_bot,
+            width=5,
+            validate="focusout",
+            validatecommand=self.sel_set_zoom_factor,
+        )
+        self.spinbox_sel_zoom_factor.bind(
+            "<Return>", self.sel_set_zoom_factor  # type: ignore
+        )
+        self.spinbox_sel_zoom_factor.grid(column=6, row=0)
+        self.spinbox_sel_zoom_factor.bind("<<Decrement>>", sel_zoom_out)
+        self.spinbox_sel_zoom_factor.bind("<<Increment>>", sel_zoom_in)
+
         self.root.mainloop()
 
     def toggle_label_monitors(self, _event: Optional[Event[Any]] = None) -> None:
@@ -176,6 +216,18 @@ class Window:
     def toggle_show_unselected(self, _event: Optional[Event[Any]] = None) -> None:
         self.show_unselected = not self.show_unselected
         self.schedule_redraw()
+
+    def sel_move(
+        self, delta: Tuple[float, float]
+    ) -> Callable[[DefaultArg(Optional[Event[Any]])], None]:
+        def event_handler(event: Optional[Event[Any]] = None) -> None:
+            d = np.array(delta)
+            if event and cast(int, event.state) & _TKINTER_SHIFT:
+                d *= _SEL_PRECISE_FACTOR
+            self.sel_pos += np.array((d[0], d[1] * self.wall_aspect))
+            self.schedule_redraw()
+
+        return event_handler
 
     def sel_zoom(
         self, delta: float, anchor: np.ndarray = np.array((0.5, 0.5))  # noqa: B008
@@ -190,17 +242,31 @@ class Window:
 
         return event_handler
 
-    def sel_move(
-        self, delta: Tuple[float, float]
-    ) -> Callable[[DefaultArg(Optional[Event[Any]])], None]:
-        def event_handler(event: Optional[Event[Any]] = None) -> None:
-            d = np.array(delta)
-            if event and cast(int, event.state) & _TKINTER_SHIFT:
-                d *= _SEL_PRECISE_FACTOR
-            self.sel_pos += np.array((d[0], d[1] * self.wall_aspect))
+    def sel_set_pos_x(self, _event: Optional[Event[Any]] = None) -> bool:
+        try:
+            self.sel_pos[0] = float(self.spinbox_sel_pos_x.get())  # type: ignore
             self.schedule_redraw()
+        except ValueError:
+            self.spinbox_sel_pos_x.set(self.sel_pos[0])
+        return False
 
-        return event_handler
+    def sel_set_pos_y(self, _event: Optional[Event[Any]] = None) -> bool:
+        try:
+            self.sel_pos[1] = float(self.spinbox_sel_pos_y.get())  # type: ignore
+            self.schedule_redraw()
+        except ValueError:
+            self.spinbox_sel_pos_y.set(self.sel_pos[1])
+        return False
+
+    def sel_set_zoom_factor(self, _event: Optional[Event[Any]] = None) -> bool:
+        try:
+            self.sel_zoom_factor = float(
+                self.spinbox_sel_zoom_factor.get()  # type: ignore
+            )
+            self.schedule_redraw()
+        except ValueError:
+            self.spinbox_sel_zoom_factor.set(self.sel_zoom_factor)
+        return False
 
     def start_mouse_move(self, event: Event[Any]) -> None:
         self.mouse_last_pos = np.array((event.x, event.y))
@@ -257,6 +323,15 @@ class Window:
     def redraw(self, _event: "Optional[Event[Any]]" = None) -> None:
         self.sel_zoom_factor = max(_SEL_ZOOM_MIN, min(self.sel_zoom_factor, 1.0))
         self.sel_pos = np.clip(self.sel_pos, 0.0, 1.0 - self.sel_zoom_factor)
+
+        # We first set the spinbox values to empty to prevent a bug where we would else
+        # select their contents when clicking the increment/decrement buttons.
+        self.spinbox_sel_pos_x.set("")
+        self.spinbox_sel_pos_y.set("")
+        self.spinbox_sel_zoom_factor.set("")
+        self.spinbox_sel_pos_x.set(f"{self.sel_pos[0]:.3f}")
+        self.spinbox_sel_pos_y.set(f"{self.sel_pos[1]:.3f}")
+        self.spinbox_sel_zoom_factor.set(f"{self.sel_zoom_factor:.3f}")
 
         self.canvas_size = np.array(
             (self.canvas.winfo_width(), self.canvas.winfo_height())
