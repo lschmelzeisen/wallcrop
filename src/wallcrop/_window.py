@@ -16,153 +16,221 @@
 
 from __future__ import annotations
 
-from itertools import cycle
-from tkinter import BooleanVar, Canvas, Event, Menu, Tk, messagebox
+from tkinter import BooleanVar, Menu, Tk, messagebox
 from tkinter.ttk import Frame, Label, Spinbox
-from typing import Any, Callable, Optional, Tuple, cast
 
 import numpy as np
-from mypy_extensions import DefaultArg
 from PIL import Image
-from PIL.ImageDraw import Draw
-from PIL.ImageTk import PhotoImage
 
 import wallcrop
+from wallcrop._selection import Selection
+from wallcrop._selection_widget import SelectionWidget
 from wallcrop._settings import WorkstationSettings
 
-# Abbreviations used in this implementation:
-# - aspect: aspect ratio
-# - mon: monitor
-# - pos: position
-# - sel: selection
-# - wall: wall
-
-_TKINTER_SHIFT = 0x1  # https://stackoverflow.com/a/61998948/211404
-_GUI_MINSIZE = (800, 600)
-_GUI_PADDING = 20
-_GUI_REDRAW_FPS = 60
-_SEL_ZOOM_DEFAULT = 0.75
-_SEL_ZOOM_MIN = 0.1
-_SEL_ZOOM_SPEED = 0.01
-_SEL_MOVE_SPEED = 0.01
-_SEL_PRECISE_FACTOR = 1 / 10
-_CANVAS_BG = "#1D2021"
-_SEL_BG_COLOR = "#282828"
-_SEL_BG_ALPHA = "AA"
-_MON_LABEL_COLORS = (
-    ("#FB4934", "#B8BB26", "FABD2F", "#83A598", "#D3869B", "#8EC07C", "#FE8019")
-    + ("#CC241D", "#98971A", "#D79921", "#458588", "#B16286", "#689D6A", "#D65D0E")
-    + ("#9D0006", "#79740E", "#B57614", "#076678", "#8F3F71", "#427B58", "#AF3A03")
-)
-_MON_LABEL_ALPHA = "33"
+_MINSIZE = (800, 600)
+_PADDING = 20
 
 
 class Window:
     def __init__(self, workstation: WorkstationSettings, wallpaper: Image.Image):
-        self.workstation = workstation
-        self.wall = wallpaper
-        self.wall_size = np.array(wallpaper.size)
-        self.wall_aspect = np.divide(*self.wall_size)
+        self._root = Tk()
+        self._root.title("wallcrop")
+        self._root.minsize(*_MINSIZE)
 
-        if not self.workstation.monitors:
-            # TODO: move to pydantic validation of settings.
-            raise Exception("Need at least one monitor configured per workstation.")
+        self._show_monitor_labels = BooleanVar(self._root, value=False)
+        self._show_unselected_area = BooleanVar(self._root, value=True)
 
-        self.mon_coord_min = np.array((float("inf"), float("inf")))
-        self.mon_coord_max = np.array((-float("inf"), -float("inf")))
-        for mon in self.workstation.monitors:
-            # TODO: convert settings to np.array while parsing
-            self.mon_coord_min = np.minimum(np.array(mon.position), self.mon_coord_min)
-            self.mon_coord_max = np.maximum(
-                np.array(mon.position) + np.array(mon.size),
-                self.mon_coord_max,
-            )
+        frame = Frame(self._root, padding=_PADDING)
+        frame.grid(column=0, row=0, sticky="n w s e")
+        self._root.columnconfigure(0, weight=1)  # type: ignore
+        self._root.rowconfigure(0, weight=1)  # type: ignore
 
-        self.sel_zoom_factor = _SEL_ZOOM_DEFAULT
-        self.sel_pos = (np.ones(2) - self.sel_zoom_factor) / 2  # Center selection.
+        frame_top = Frame(frame)
+        frame_top.grid(column=0, row=0, sticky="n w s e")
 
-        self.canvas_size = np.array((0.0, 0.0))
-        self.canvas_wall_size = np.array((0.0, 0.0))
-        self.canvas_wall_pos = np.array((0.0, 0.0))
-        self.last_canvas_size = np.array((0.0, 0.0))
-        self.resized_wall = self.wall
-        self.canvas_wall: Optional[PhotoImage] = None
-        self.sel = self.wall
-        self.sel_draw = Draw(self.sel)
-        self.canvas_sel: Optional[PhotoImage] = None
+        frame_bot = Frame(frame)
+        frame_bot.grid(column=0, row=2, sticky="n w s e")
 
-        self.redraw_scheduled = False
-        self.mouse_moving = False
-        self.mouse_zooming = False
-        self.mouse_zooming_anchor: Optional[np.ndarray] = None
-        self.mouse_last_pos = np.array((0.0, 0.0))
+        self._selection = Selection(aspect_ratio=np.divide(*wallpaper.size))
+        self._selection.register_onchange_handler(self._reset_spinbox_values)
 
-        sel_move_left = self.sel_move((-_SEL_MOVE_SPEED, 0.0))
-        sel_move_right = self.sel_move((+_SEL_MOVE_SPEED, 0.0))
-        sel_move_up = self.sel_move((0.0, -_SEL_MOVE_SPEED))
-        sel_move_down = self.sel_move((0.0, +_SEL_MOVE_SPEED))
-        sel_zoom_in = self.sel_zoom(-_SEL_ZOOM_SPEED)
-        sel_zoom_out = self.sel_zoom(+_SEL_ZOOM_SPEED)
+        self._selection_widget = SelectionWidget(
+            parent=frame,
+            workstation=workstation,
+            wallpaper=wallpaper,
+            selection=self._selection,
+        )
+        self._selection_widget.set_show_monitor_labels(self._show_monitor_labels.get())
+        self._selection_widget.set_show_unselected_area(
+            self._show_unselected_area.get()
+        )
+        self._selection_widget.grid(column=0, row=1, sticky="n w s e", pady=_PADDING)
+        frame.columnconfigure(0, weight=1)  # type: ignore
+        frame.rowconfigure(1, weight=1)  # type: ignore
 
-        self.root = Tk()
-        self.root.title("wallcrop")
-        self.root.minsize(*_GUI_MINSIZE)
+        label_wallpaper = Label(frame_top, text=workstation.name)
+        label_wallpaper.grid(column=0, row=0)
 
-        self.label_monitors = BooleanVar(self.root, value=False)
-        self.label_monitors.trace_add("write", self.schedule_redraw)
-        self.show_unselected = BooleanVar(self.root, value=True)
-        self.show_unselected.trace_add("write", self.schedule_redraw)
+        # Center columns 1-6 on frame_bot.
+        frame_bot.columnconfigure(0, weight=1)  # type: ignore
+        frame_bot.columnconfigure(7, weight=1)  # type: ignore
 
-        self.root.bind("<Escape>", self.exit)
-        self.root.bind("<q>", self.exit)
-        self.root.bind(
+        # TODO: Figure out how to not have spinbox show zero when using
+        #  increment/decrement buttons.
+        label_selection_position_x = Label(frame_bot, text="X: ")
+        label_selection_position_x.grid(column=1, row=0)
+        self._spinbox_selection_position_x = Spinbox(
+            frame_bot, width=5, validate="focusout"
+        )
+        self._spinbox_selection_position_x.grid(column=2, row=0)
+
+        label_selection_position_y = Label(frame_bot, text="  Y: ")
+        label_selection_position_y.grid(column=3, row=0)
+        self._spinbox_selection_position_y = Spinbox(
+            frame_bot, width=5, validate="focusout"
+        )
+        self._spinbox_selection_position_y.grid(column=4, row=0)
+
+        label_selection_zoom = Label(frame_bot, text="  Zoom: ")
+        label_selection_zoom.grid(column=5, row=0)
+        self._spinbox_selection_zoom = Spinbox(frame_bot, width=5, validate="focusout")
+        self._spinbox_selection_zoom.grid(column=6, row=0)
+
+        self._bind_actions()
+        self._set_up_menubar()
+        self._reset_spinbox_values()
+
+    def _bind_actions(self) -> None:
+        self._root.bind("<Escape>", lambda _event: self.quit())
+        self._root.bind("<q>", lambda _event: self.quit())
+
+        self._root.bind(
             "<m>",
-            lambda _event: self.label_monitors.set(not (self.label_monitors.get())),
+            lambda _event: self._show_monitor_labels.set(
+                not (self._show_monitor_labels.get())
+            ),
         )
-        self.root.bind(
+        self._root.bind(
             "<n>",
-            lambda _event: self.show_unselected.set(not (self.show_unselected.get())),
+            lambda _event: self._show_unselected_area.set(
+                not (self._show_unselected_area.get())
+            ),
         )
-        self.root.bind("<i>", sel_zoom_in)
-        self.root.bind("<I>", sel_zoom_in)
-        self.root.bind("<o>", sel_zoom_out)
-        self.root.bind("<O>", sel_zoom_out)
-        self.root.bind("<Left>", sel_move_left)
-        self.root.bind("<Shift-Left>", sel_move_left)
-        self.root.bind("<h>", sel_move_left)
-        self.root.bind("<H>", sel_move_left)
-        self.root.bind("<Right>", sel_move_right)
-        self.root.bind("<Shift-Right>", sel_move_right)
-        self.root.bind("<l>", sel_move_right)
-        self.root.bind("<L>", sel_move_right)
-        self.root.bind("<Up>", sel_move_up)
-        self.root.bind("<Shift-Up>", sel_move_up)
-        self.root.bind("<k>", sel_move_up)
-        self.root.bind("<K>", sel_move_up)
-        self.root.bind("<Down>", sel_move_down)
-        self.root.bind("<Shift-Down>", sel_move_down)
-        self.root.bind("<j>", sel_move_down)
-        self.root.bind("<J>", sel_move_down)
 
-        self.root.option_add("*tearOff", False)
-        menu = Menu(self.root)
+        self._root.bind("<i>", lambda _event: self._selection.zoom_increase())
+        self._root.bind(
+            "<I>", lambda _event: self._selection.zoom_increase(precise=True)
+        )
+
+        self._root.bind("<o>", lambda _event: self._selection.zoom_decrease())
+        self._root.bind(
+            "<O>", lambda _event: self._selection.zoom_decrease(precise=True)
+        )
+
+        self._root.bind("<h>", lambda _event: self._selection.move_left())
+        self._root.bind("<H>", lambda _event: self._selection.move_left(precise=True))
+        self._root.bind("<Left>", lambda _event: self._selection.move_left())
+        self._root.bind(
+            "<Shift-Left>", lambda _event: self._selection.move_left(precise=True)
+        )
+
+        self._root.bind("<l>", lambda _event: self._selection.move_right())
+        self._root.bind("<L>", lambda _event: self._selection.move_right(precise=True))
+        self._root.bind("<Right>", lambda _event: self._selection.move_right())
+        self._root.bind(
+            "<Shift-Right>", lambda _event: self._selection.move_right(precise=True)
+        )
+
+        self._root.bind("<k>", lambda _event: self._selection.move_up())
+        self._root.bind("<K>", lambda _event: self._selection.move_up(precise=True))
+        self._root.bind("<Up>", lambda _event: self._selection.move_up())
+        self._root.bind(
+            "<Shift-Up>", lambda _event: self._selection.move_up(precise=True)
+        )
+
+        self._root.bind("<j>", lambda _event: self._selection.move_down())
+        self._root.bind("<J>", lambda _event: self._selection.move_down(precise=True))
+        self._root.bind("<Down>", lambda _event: self._selection.move_down())
+        self._root.bind(
+            "<Shift-Down>", lambda _event: self._selection.move_down(precise=True)
+        )
+
+        self._spinbox_selection_position_x.configure(
+            validatecommand=lambda *_args: self._set_selection_position_x()
+        )
+        self._spinbox_selection_position_x.bind(
+            "<Return>", lambda _event: self._set_selection_position_x()  # type: ignore
+        )
+        self._spinbox_selection_position_x.bind(
+            "<<Decrement>>", lambda _event: self._selection.move_left()
+        )
+        self._spinbox_selection_position_x.bind(
+            "<<Increment>>", lambda _event: self._selection.move_right()
+        )
+
+        self._spinbox_selection_position_y.configure(
+            validatecommand=lambda *_args: self._set_selection_position_y()
+        )
+        self._spinbox_selection_position_y.bind(
+            "<Return>", lambda _event: self._set_selection_position_y()  # type: ignore
+        )
+        self._spinbox_selection_position_y.bind(
+            "<<Decrement>>", lambda _event: self._selection.move_up()
+        )
+        self._spinbox_selection_position_y.bind(
+            "<<Increment>>", lambda _event: self._selection.move_down()
+        )
+
+        self._spinbox_selection_zoom.configure(
+            validatecommand=lambda *_args: self._set_selection_zoom()
+        )
+        self._spinbox_selection_zoom.bind(
+            "<Return>", lambda _event: self._set_selection_zoom()  # type: ignore
+        )
+        self._spinbox_selection_zoom.bind(
+            "<<Decrement>>", lambda _event: self._selection.zoom_decrease()
+        )
+        self._spinbox_selection_zoom.bind(
+            "<<Increment>>", lambda _event: self._selection.zoom_increase()
+        )
+
+        self._show_monitor_labels.trace_add(
+            "write",
+            lambda *_args: self._selection_widget.set_show_monitor_labels(
+                self._show_monitor_labels.get()
+            ),
+        )
+        self._show_unselected_area.trace_add(
+            "write",
+            lambda *_args: self._selection_widget.set_show_unselected_area(
+                self._show_unselected_area.get()
+            ),
+        )
+
+    def _set_up_menubar(self) -> None:
+        # TODO: check that this look good on macOS, as described here:
+        #   https://tkdocs.com/tutorial/menus.html#platformmenus
+
+        self._root.option_add("*tearOff", False)
+
+        menu = Menu(self._root)
 
         menu_file = Menu(menu)
         menu_file.add_command(  # type: ignore
-            label="Quit", underline=0, accelerator="Q, Escape", command=self.exit
+            label="Quit", underline=0, accelerator="Q, Escape", command=self.quit
         )
         menu.add_cascade(menu=menu_file, label="File", underline=0)  # type: ignore
 
         menu_view = Menu(menu)
         menu_view.add_checkbutton(  # type: ignore
             label="Label Monitors",
-            variable=self.label_monitors,
+            variable=self._show_monitor_labels,
             underline=6,
             accelerator="M",
         )
         menu_view.add_checkbutton(  # type: ignore
             label="Show Unselected",
-            variable=self.show_unselected,
+            variable=self._show_unselected_area,
             underline=6,
             accelerator="N",
         )
@@ -173,7 +241,7 @@ class Window:
             label="About Wallcrop",
             underline=0,
             command=lambda: messagebox.showinfo(
-                parent=self.root,
+                parent=self._root,
                 title="About Wallcrop",
                 message=f"Wallcrop {wallcrop.__version__}",
                 detail=(
@@ -185,273 +253,42 @@ class Window:
         )
         menu.add_cascade(menu=menu_help, label="Help", underline=1)  # type: ignore
 
-        # TODO: check that this look good on macOS, as decribed here:
-        #   https://tkdocs.com/tutorial/menus.html#platformmenus
-        self.root["menu"] = menu
+        self._root["menu"] = menu
 
-        frame = Frame(self.root, padding=_GUI_PADDING)
-        frame.grid(column=0, row=0, sticky="n w s e")
-        self.root.columnconfigure(0, weight=1)  # type: ignore
-        self.root.rowconfigure(0, weight=1)  # type: ignore
+    def mainloop(self) -> None:
+        self._root.mainloop()
 
-        self.canvas = Canvas(frame)
-        self.canvas.configure(
-            background=_CANVAS_BG,
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        self.canvas.grid(column=0, row=1, sticky="n w s e", pady=_GUI_PADDING)
-        frame.columnconfigure(0, weight=1)  # type: ignore
-        frame.rowconfigure(1, weight=1)  # type: ignore
+    def quit(self) -> None:
+        self._root.destroy()
 
-        # TODO: check if these keybinds work on Windows/macOS
-        self.canvas.bind("<Motion>", self.mouse_motion)
-        self.canvas.bind("<ButtonPress-1>", self.start_mouse_move)
-        self.canvas.bind("<ButtonRelease-1>", self.stop_mouse_move)
-        self.canvas.bind("<ButtonPress-3>", self.start_mouse_zoom)
-        self.canvas.bind("<ButtonRelease-3>", self.stop_mouse_zoom)
-        self.canvas.bind("<ButtonPress-4>", sel_zoom_out)
-        self.canvas.bind("<Shift-ButtonPress-4>", sel_zoom_out)
-        self.canvas.bind("<ButtonPress-5>", sel_zoom_in)
-        self.canvas.bind("<Shift-ButtonPress-5>", sel_zoom_in)
-        self.canvas.bind("<Configure>", self.schedule_redraw)
-
-        frame_top = Frame(frame)
-        frame_top.grid(column=0, row=0, sticky="n w s e")
-
-        label_wallpaper = Label(frame_top, text=workstation.name)
-        label_wallpaper.grid(column=0, row=0)
-
-        frame_bot = Frame(frame)
-        frame_bot.grid(column=0, row=2, sticky="n w s e")
-        frame_bot.columnconfigure(0, weight=1)  # type: ignore
-        frame_bot.columnconfigure(7, weight=1)  # type: ignore
-
-        label_sel_pos_x = Label(frame_bot, text="X: ")
-        label_sel_pos_x.grid(column=1, row=0)
-        self.spinbox_sel_pos_x = Spinbox(
-            frame_bot, width=5, validate="focusout", validatecommand=self.sel_set_pos_x
-        )
-        self.spinbox_sel_pos_x.bind("<Return>", self.sel_set_pos_x)  # type: ignore
-        self.spinbox_sel_pos_x.bind("<<Decrement>>", sel_move_left)
-        self.spinbox_sel_pos_x.bind("<<Increment>>", sel_move_right)
-        self.spinbox_sel_pos_x.grid(column=2, row=0)
-
-        label_sel_pos_y = Label(frame_bot, text="  Y: ")
-        label_sel_pos_y.grid(column=3, row=0)
-        self.spinbox_sel_pos_y = Spinbox(
-            frame_bot, width=5, validate="focusout", validatecommand=self.sel_set_pos_y
-        )
-        self.spinbox_sel_pos_y.bind("<Return>", self.sel_set_pos_y)  # type: ignore
-        self.spinbox_sel_pos_y.bind("<<Decrement>>", sel_move_up)
-        self.spinbox_sel_pos_y.bind("<<Increment>>", sel_move_down)
-        self.spinbox_sel_pos_y.grid(column=4, row=0)
-
-        label_sel_zoom_factor = Label(frame_bot, text="  Zoom: ")
-        label_sel_zoom_factor.grid(column=5, row=0)
-        self.spinbox_sel_zoom_factor = Spinbox(
-            frame_bot,
-            width=5,
-            validate="focusout",
-            validatecommand=self.sel_set_zoom_factor,
-        )
-        self.spinbox_sel_zoom_factor.bind(
-            "<Return>", self.sel_set_zoom_factor  # type: ignore
-        )
-        self.spinbox_sel_zoom_factor.grid(column=6, row=0)
-        self.spinbox_sel_zoom_factor.bind("<<Decrement>>", sel_zoom_out)
-        self.spinbox_sel_zoom_factor.bind("<<Increment>>", sel_zoom_in)
-
-        self.root.mainloop()
-
-    def exit(self, _event: Optional[Event[Any]] = None) -> None:
-        self.root.destroy()
-
-    def sel_move(
-        self, delta: Tuple[float, float]
-    ) -> Callable[[DefaultArg(Optional[Event[Any]])], None]:
-        def event_handler(event: Optional[Event[Any]] = None) -> None:
-            d = np.array(delta)
-            if event and cast(int, event.state) & _TKINTER_SHIFT:
-                d *= _SEL_PRECISE_FACTOR
-            self.sel_pos += np.array((d[0], d[1] * self.wall_aspect))
-            self.schedule_redraw()
-
-        return event_handler
-
-    def sel_zoom(
-        self, delta: float, anchor: np.ndarray = np.array((0.5, 0.5))  # noqa: B008
-    ) -> Callable[[DefaultArg(Optional[Event[Any]])], None]:
-        def event_handler(event: Optional[Event[Any]] = None) -> None:
-            d = delta
-            if event and cast(int, event.state) & _TKINTER_SHIFT:
-                d *= _SEL_PRECISE_FACTOR
-            self.sel_zoom_factor += d
-            self.sel_pos -= (1.0 - anchor) * np.repeat(d, 2)
-            self.schedule_redraw()
-
-        return event_handler
-
-    def sel_set_pos_x(self, _event: Optional[Event[Any]] = None) -> bool:
+    def _set_selection_position_x(self) -> bool:
         try:
-            self.sel_pos[0] = float(self.spinbox_sel_pos_x.get())  # type: ignore
-            self.schedule_redraw()
+            value = float(self._spinbox_selection_position_x.get())  # type: ignore
         except ValueError:
-            self.spinbox_sel_pos_x.set(self.sel_pos[0])
-        return False
+            self._spinbox_selection_position_x.set(self._selection.position[0])
+            return False
+        self._selection.set_position(np.array((value, self._selection.position[1])))
+        return True
 
-    def sel_set_pos_y(self, _event: Optional[Event[Any]] = None) -> bool:
+    def _set_selection_position_y(self) -> bool:
         try:
-            self.sel_pos[1] = float(self.spinbox_sel_pos_y.get())  # type: ignore
-            self.schedule_redraw()
+            value = float(self._spinbox_selection_position_y.get())  # type: ignore
         except ValueError:
-            self.spinbox_sel_pos_y.set(self.sel_pos[1])
-        return False
+            self._spinbox_selection_position_y.set(self._selection.position[1])
+            return False
+        self._selection.set_position(np.array((self._selection.position[0], value)))
+        return True
 
-    def sel_set_zoom_factor(self, _event: Optional[Event[Any]] = None) -> bool:
+    def _set_selection_zoom(self) -> bool:
         try:
-            self.sel_zoom_factor = float(
-                self.spinbox_sel_zoom_factor.get()  # type: ignore
-            )
-            self.schedule_redraw()
+            value = float(self._spinbox_selection_zoom.get())  # type: ignore
         except ValueError:
-            self.spinbox_sel_zoom_factor.set(self.sel_zoom_factor)
-        return False
+            self._spinbox_selection_zoom.set(self._selection.zoom)
+            return False
+        self._selection.set_zoom(value)
+        return True
 
-    def start_mouse_move(self, event: Event[Any]) -> None:
-        self.mouse_last_pos = np.array((event.x, event.y))
-        self.mouse_moving = True
-
-    def stop_mouse_move(self, _event: Event[Any]) -> None:
-        self.mouse_moving = False
-
-    def start_mouse_zoom(self, event: Event[Any]) -> None:
-        self.mouse_last_pos = np.array((event.x, event.y))
-        self.mouse_zooming = True
-        canvas_sel_center = self.canvas_wall_pos + self.canvas_wall_size * (
-            self.sel_pos + self.sel_zoom_factor / 2
-        )
-        self.mouse_zooming_anchor = self.mouse_last_pos > canvas_sel_center
-
-    def stop_mouse_zoom(self, _event: Event[Any]) -> None:
-        self.mouse_zooming = False
-        self.mouse_zooming_anchor = None
-
-    def mouse_motion(self, event: Event[Any]) -> None:
-        mouse_pos = np.array((event.x, event.y))
-
-        if self.mouse_moving:
-            self.sel_pos += (mouse_pos - self.mouse_last_pos) / self.canvas_size
-            self.schedule_redraw()
-
-        if self.mouse_zooming:
-            assert self.mouse_zooming_anchor is not None
-            # Check if we are moving closer to the off-screen corner corresponding to
-            # our zoom anchor, and zoom in or out corresponding to that.
-            anchor = (self.mouse_zooming_anchor - 0.5) * 1e7
-            zoom_direction = 1 - 2 * int(
-                np.linalg.norm(anchor - mouse_pos)
-                > np.linalg.norm(anchor - self.mouse_last_pos)
-            )
-
-            self.sel_zoom(
-                zoom_direction
-                * np.linalg.norm(mouse_pos - self.mouse_last_pos)
-                / np.linalg.norm(self.canvas_size),
-                anchor=self.mouse_zooming_anchor,
-            )()
-
-            self.schedule_redraw()
-
-        self.mouse_last_pos = mouse_pos
-
-    def schedule_redraw(self, *_args: object) -> None:
-        if not self.redraw_scheduled:
-            self.redraw_scheduled = True
-            self.root.after(1000 // _GUI_REDRAW_FPS, self.redraw)
-
-    def redraw(self, _event: "Optional[Event[Any]]" = None) -> None:
-        self.sel_zoom_factor = max(_SEL_ZOOM_MIN, min(self.sel_zoom_factor, 1.0))
-        self.sel_pos = np.clip(self.sel_pos, 0.0, 1.0 - self.sel_zoom_factor)
-
-        # We first set the spinbox values to empty to prevent a bug where we would else
-        # select their contents when clicking the increment/decrement buttons.
-        self.spinbox_sel_pos_x.set("")
-        self.spinbox_sel_pos_y.set("")
-        self.spinbox_sel_zoom_factor.set("")
-        self.spinbox_sel_pos_x.set(f"{self.sel_pos[0]:.3f}")
-        self.spinbox_sel_pos_y.set(f"{self.sel_pos[1]:.3f}")
-        self.spinbox_sel_zoom_factor.set(f"{self.sel_zoom_factor:.3f}")
-
-        self.canvas_size = np.array(
-            (self.canvas.winfo_width(), self.canvas.winfo_height())
-        )
-        self.canvas_wall_size = np.array(((self.canvas_size[0] - 2 * _GUI_PADDING), 0))
-        self.canvas_wall_size[1] = int(self.canvas_wall_size[0] / self.wall_aspect)
-        if self.canvas_wall_size[1] > self.canvas_size[1] - 2 * _GUI_PADDING:
-            self.canvas_wall_size[1] = self.canvas_size[1] - 2 * _GUI_PADDING
-            self.canvas_wall_size[0] = int(self.canvas_wall_size[1] * self.wall_aspect)
-
-        if not np.array_equal(self.canvas_size, self.last_canvas_size):
-            self.last_canvas_size = self.canvas_size
-
-            self.resized_wall = self.wall.resize(
-                cast(Tuple[int, int], tuple(self.canvas_wall_size)), Image.LANCZOS
-            )
-            self.canvas_wall = PhotoImage(self.resized_wall)
-
-            self.sel = Image.new(
-                "RGBA", cast(Tuple[int, int], tuple(self.canvas_wall_size.astype(int)))
-            )
-            self.sel_draw = Draw(self.sel)
-
-            self.canvas_wall_pos = (self.canvas_size - self.canvas_wall_size) / 2
-            self.canvas.delete("wall")  # type: ignore
-            self.canvas.create_image(  # type: ignore
-                *self.canvas_wall_pos,
-                image=self.canvas_wall,
-                anchor="nw",
-                tags="wall",
-            )
-            self.canvas.delete("sel")  # type: ignore
-            self.canvas.create_image(  # type: ignore
-                *self.canvas_wall_pos,
-                image=self.canvas_sel,
-                anchor="nw",
-                tags="sel",
-            )
-
-        self.sel.paste(
-            _SEL_BG_COLOR + (_SEL_BG_ALPHA if self.show_unselected.get() else "FF"),
-            (0, 0, *self.sel.size),
-        )
-
-        for mon, mon_label_color in zip(
-            self.workstation.monitors, cycle(_MON_LABEL_COLORS)
-        ):
-            mon_sel_size = (
-                np.array(mon.size) * self.sel_zoom_factor / self.mon_coord_max
-            )
-            mon_sel_pos = (np.array(mon.position) - self.mon_coord_min) * (
-                self.sel_zoom_factor / self.mon_coord_max
-            )
-            mon_canvas_pos1 = (self.sel_pos + mon_sel_pos) * self.canvas_wall_size
-            mon_canvas_pos2 = mon_canvas_pos1 + mon_sel_size * self.canvas_wall_size
-
-            self.sel_draw.rectangle(
-                (*mon_canvas_pos1, *mon_canvas_pos2),
-                "#FFFFFF00"
-                if not self.label_monitors.get()
-                else mon_label_color + _MON_LABEL_ALPHA,
-            )
-            if self.label_monitors.get():
-                self.sel_draw.text(
-                    tuple(mon_canvas_pos1),
-                    f"{mon.name}\n({mon.resolution[0]}x{mon.resolution[1]})",
-                    mon_label_color + "FF",
-                )
-
-        self.canvas_sel = PhotoImage(self.sel)
-        self.canvas.itemconfig("sel", image=self.canvas_sel)
-
-        self.redraw_scheduled = False
+    def _reset_spinbox_values(self) -> None:
+        self._spinbox_selection_position_x.set(f"{self._selection.position[0]:.3f}")
+        self._spinbox_selection_position_y.set(f"{self._selection.position[1]:.3f}")
+        self._spinbox_selection_zoom.set(f"{self._selection.zoom:.3f}")

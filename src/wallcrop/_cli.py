@@ -14,6 +14,8 @@
 # limitations under the License.
 #
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from nasty_utils import Argument, Program, ProgramConfig
@@ -37,6 +39,9 @@ class WallcropProgram(Program):
 
     @overrides
     def run(self) -> None:
+        # TODO: pydantic validation of settings.
+
         wallpaper_path = Path("assets/Nordic Landscape 1125x250.png")
         with Image.open(wallpaper_path) as wallpaper:
-            Window(self.settings.workstations[0], wallpaper)
+            window = Window(self.settings.workstations[0], wallpaper)
+            window.mainloop()
