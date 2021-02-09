@@ -221,6 +221,46 @@ class Window:
         )
         menu.add_cascade(menu=menu_file, label="File", underline=0)  # type: ignore
 
+        menu_edit = Menu(menu)
+        menu_edit.add_command(  # type: ignore
+            label="Move Left",
+            underline=5,
+            accelerator="H, Left",
+            command=self._selection.move_left,
+        )
+        menu_edit.add_command(  # type: ignore
+            label="Move Right",
+            underline=5,
+            accelerator="L, Right",
+            command=self._selection.move_right,
+        )
+        menu_edit.add_command(  # type: ignore
+            label="Move Up",
+            underline=5,
+            accelerator="K, Up",
+            command=self._selection.move_up,
+        )
+        menu_edit.add_command(  # type: ignore
+            label="Move Down",
+            underline=5,
+            accelerator="J, Down",
+            command=self._selection.move_down,
+        )
+        menu_edit.add_separator()  # type: ignore
+        menu_edit.add_command(  # type: ignore
+            label="Increase Zoom",
+            underline=0,
+            accelerator="I",
+            command=self._selection.zoom_increase,
+        )
+        menu_edit.add_command(  # type: ignore
+            label="Decrease Zoom",
+            underline=10,
+            accelerator="O",
+            command=self._selection.zoom_decrease,
+        )
+        menu.add_cascade(menu=menu_edit, label="Edit", underline=0)  # type: ignore
+
         menu_view = Menu(menu)
         menu_view.add_checkbutton(  # type: ignore
             label="Label Monitors",
@@ -251,7 +291,7 @@ class Window:
                 ),
             ),
         )
-        menu.add_cascade(menu=menu_help, label="Help", underline=1)  # type: ignore
+        menu.add_cascade(menu=menu_help, label="Help", underline=3)  # type: ignore
 
         self._root["menu"] = menu
 
