@@ -16,9 +16,8 @@
 
 from __future__ import annotations
 
-from itertools import cycle
 from tkinter import Canvas, Event, Misc
-from typing import Any
+from typing import Any, Tuple
 
 import numpy as np
 from PIL import Image
@@ -27,6 +26,11 @@ from PIL.ImageTk import PhotoImage
 
 from wallcrop._selection import T_ZOOM_ANCHOR, Selection
 from wallcrop._settings import WorkstationSettings
+
+
+def _hex_color_to_rgba(c: str) -> Tuple[int, int, int, int]:
+    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16), int(c[7:9], 16)
+
 
 _REDRAW_FPS = 60
 _PADDING = 20
@@ -39,6 +43,29 @@ _MONITOR_LABEL_COLORS = (
     + ("#9D0006", "#79740E", "#B57614", "#076678", "#8F3F71", "#427B58", "#AF3A03")
 )
 _MONITOR_LABEL_ALPHA = "33"
+
+_PALETTE = (
+    (
+        *_hex_color_to_rgba("FFFFFF00"),
+        *_hex_color_to_rgba(_SELECTION_VISUAL_BG_COLOR + _SELECTION_VISUAL_BG_ALPHA),
+        *_hex_color_to_rgba(_SELECTION_VISUAL_BG_COLOR + "FF"),
+    )
+    + tuple(
+        color_byte
+        for monitor_label_color in _MONITOR_LABEL_COLORS
+        for color_byte in _hex_color_to_rgba(monitor_label_color + "FF")
+    )
+    + tuple(
+        color_byte
+        for monitor_label_color in _MONITOR_LABEL_COLORS
+        for color_byte in _hex_color_to_rgba(monitor_label_color + _MONITOR_LABEL_ALPHA)
+    )
+)
+_PALETTE_INDEX_TRANSPARENT = 0
+_PALETTE_INDEX_BG_TRANSPARENT = 1
+_PALETTE_INDEX_BG_OPAQUE = 2
+_PALETTE_INDEX_OFFSET_MONITOR_LABELS = 3
+_PALETTE_INDEX_OFFSET_MONITOR_LABELS_TRANSPARENT = 3 + len(_MONITOR_LABEL_COLORS)
 
 
 class SelectionWidget(Canvas):
@@ -218,8 +245,9 @@ class SelectionWidget(Canvas):
             self._resize_scheduled = False
 
         self._selection_visual.paste(
-            _SELECTION_VISUAL_BG_COLOR
-            + (_SELECTION_VISUAL_BG_ALPHA if self._show_unselected_area else "FF"),
+            _PALETTE_INDEX_BG_TRANSPARENT
+            if self._show_unselected_area
+            else _PALETTE_INDEX_BG_OPAQUE,
             (0, 0, *self._selection_visual.size),
         )
         self._draw_monitors_on_selection()
@@ -236,9 +264,10 @@ class SelectionWidget(Canvas):
         self._canvas_image_wallpaper = PhotoImage(self._wallpaper_resized)
 
         self._selection_visual = Image.new(
-            "RGBA",
+            "P",
             (int(self._canvas_wallpaper_size[0]), int(self._canvas_wallpaper_size[1])),
         )
+        self._selection_visual.putpalette(_PALETTE, rawmode="RGBA")
         self._selection_visual_draw = Draw(self._selection_visual)
 
         self._canvas_wallpaper_position = (
@@ -260,9 +289,7 @@ class SelectionWidget(Canvas):
         )
 
     def _draw_monitors_on_selection(self) -> None:
-        for monitor, monitor_label_color in zip(
-            self._workstation.monitors, cycle(_MONITOR_LABEL_COLORS)
-        ):
+        for monitor_num, monitor in enumerate(self._workstation.monitors):
             monitor_position_on_selection = (
                 np.array(monitor.position) - self._workstation_coord_min
             ) * (self._selection.zoom / self._workstation_coord_max)
@@ -279,14 +306,17 @@ class SelectionWidget(Canvas):
 
             self._selection_visual_draw.rectangle(
                 (*monitor_nw_position_on_canvas, *monitor_se_position_on_canvas),
-                "#FFFFFF00"
+                _PALETTE_INDEX_TRANSPARENT
                 if not self._show_monitor_labels
-                else monitor_label_color + _MONITOR_LABEL_ALPHA,
+                else _PALETTE_INDEX_OFFSET_MONITOR_LABELS_TRANSPARENT + monitor_num,
             )
             if self._show_monitor_labels:
                 self._selection_visual_draw.text(
-                    tuple(monitor_nw_position_on_canvas),
-                    f"f{monitor.name}\n"
+                    (
+                        monitor_nw_position_on_canvas[0],
+                        monitor_nw_position_on_canvas[1],
+                    ),
+                    f"{monitor.name}\n"
                     f"({monitor.resolution[0]}x{monitor.resolution[1]})",
-                    monitor_label_color + "FF",
+                    _PALETTE_INDEX_OFFSET_MONITOR_LABELS + monitor_num,
                 )
